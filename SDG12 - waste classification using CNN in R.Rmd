@@ -1,0 +1,191 @@
+---
+title: "fdaproject"
+author: "21MIA1003 B. koushik"
+date: "2024-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+# install.packages("keras")
+#install.packages("tensorflow")
+# install.packages("reticulate")
+# install.packages("magick")
+
+library(reticulate)
+py_install("Pillow") 
+library(tensorflow)
+#install.packages("keras")
+library(keras)
+library(stringr)
+library(readr)
+library(purrr)
+library(caret)
+library(e1071)
+# install_tensorflow()  
+library(magick)
+
+data_dir <- "C:/Users/91924/Desktop/images - Copy/images"
+
+# Function to load and display images directly from the directory without processing
+display_raw_images <- function(data_dir, num_images = 10) {
+  folders <- list.files(data_dir, full.names = TRUE)
+  image_paths <- list.files(folders, full.names = TRUE, recursive = TRUE)
+  
+  # Display only the first `num_images` images
+  selected_paths <- image_paths[1:num_images]
+  
+  # Extract labels from folder names
+  labels <- basename(dirname(selected_paths))
+  
+  # Create a grid layout to display images
+  par(mfcol = c(2, 5), mar = rep(1, 4), oma = rep(0.2, 4))  
+  
+  for (i in 1:num_images) {
+    img <- image_read(selected_paths[i])  
+    plot(as.raster(img), main = labels[i])  
+  }
+  
+  cat("Displayed", num_images, "raw images from the dataset.\n")
+}
+
+# Display raw images before preprocessing
+display_raw_images(data_dir, num_images = 10)
+
+library(keras)
+library(abind)
+
+load_raw_images <- function(data_dir, target_size = c(256, 256)) {
+  image_paths <- list.files(data_dir, pattern = "\\.png$|\\.jpg$|\\.jpeg$", full.names = TRUE, recursive = TRUE)
+  images <- list()
+  labels <- character()
+
+  for (img_path in image_paths) {
+    img <- image_load(img_path, target_size = target_size, color_mode = "rgb")
+    img_array <- image_to_array(img) / 255.0
+    images <- append(images, list(img_array))
+    label <- basename(dirname(img_path))
+    labels <- c(labels, label)
+  }
+
+  if (length(images) == 0) stop("No images were loaded. Check your image directory and file extensions.")
+  
+  images_array <- do.call(abind::abind, c(images, along = 0))
+  labels_factor <- factor(labels)
+  numeric_labels <- as.numeric(labels_factor) - 1
+
+  return(list(
+    images = images_array,
+    labels = numeric_labels,
+    label_names = levels(labels_factor)
+  ))
+}
+
+#memory.limit(size = 8000)  
+
+dataset <- load_raw_images("C:/Users/91924/Desktop/images - Copy/images", target_size = c(256, 256))
+
+cat("Number of images loaded:", dim(dataset$images)[1], "\n")
+
+# Display some images to ensure they're loaded correctly
+par(mfcol = c(3, 4), mar = rep(1, 4), oma = rep(0.2, 4))
+for (i in 1:min(12, dim(dataset$images)[1])) {
+  img <- as.raster(dataset$images[i,,,])  
+  plot(img, main = paste("Label:", dataset$label_names[dataset$labels[i] + 1]))  
+}
+
+
+
+# Print the shape of the dataset to check if it's loaded correctly
+cat("Images shape:", dim(dataset$images), "\n")
+cat("Labels shape:", length(dataset$labels), "\n")
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(dataset$labels, p = 0.8, list = FALSE)
+train_data <- dataset$images[train_indices,,,]
+train_labels <- dataset$labels[train_indices]
+test_data <- dataset$images[-train_indices,,,]
+test_labels <- dataset$labels[-train_indices]
+
+#install.packages("keras")
+library(keras)
+#install_keras()
+
+
+# Input layer
+input_layer <- layer_input(shape = c(256, 256, 3))
+
+# Define the convolutional layers
+conv_1 <- input_layer %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2))
+
+# More convolutional layers
+conv_2 <- conv_1 %>%
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = "relu") %>%
+  layer_max_pooling_2d(pool_size = c(2, 2))
+
+# Flatten and fully connected layers
+flattened <- conv_2 %>%
+  layer_flatten() %>%
+  layer_dense(units = 256, activation = "relu") %>%
+  layer_dense(units = 10, activation = "softmax")
+
+# Create the model
+model <- keras_model(inputs = input_layer, outputs = flattened)
+
+# Compile the model
+model %>% compile(
+  optimizer = "adam",
+  loss = "sparse_categorical_crossentropy",
+  metrics = c("accuracy")
+)
+
+
+
+# Fit the model to your data
+history <- model %>% fit(
+  train_data,   
+  train_labels,  
+  epochs = 10,   
+  batch_size = 32 
+)
+
+
+# Plot training history
+plot(history)
+
+# Make predictions on the test data
+predictions <- model %>% predict(test_data)
+
+# Get the predicted class indices
+prediction_test_data <- apply(predictions, 1, which.max) - 1
+
+# Show 2 images with their predicted labels
+par(mfcol = c(2, 4))  
+
+# Select two random indices for displaying images
+set.seed(123)  
+indices <- sample(1:nrow(test_data), 4)
+
+# Loop over the selected images and display them
+for (i in indices) {
+  img_rgb <- test_data[i,,,]  
+  img_raster <- as.raster(img_rgb)  
+  
+  # Plot the image
+  plot(img_raster, main = NULL)  
+  
+  # Add the predicted label below the image
+  text(x = 0.5, y = 0.1, labels = paste("Predicted:", dataset$label_names[prediction_test_data[i] + 1]), 
+       adj = c(0.5, 0), cex = 0.6, xpd = TRUE)
+}
+
+```
+
